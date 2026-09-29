@@ -10,7 +10,7 @@ const EMOJIS = ['⚡', '⚛️', '🎨', '🧠', '📚', '🔬', '🌍', '🎯',
 const COLOR_OPTIONS: DeckColor[] = ['violet', 'cyan', 'rose', 'amber', 'emerald', 'sky'];
 
 interface DeckFormProps {
-  onSubmit: (data: Omit<Deck, 'id' | 'createdAt'>) => void;
+  onSubmit: (data: Omit<Deck, 'id' | 'createdAt' | 'userId'>) => void;
   onCancel: () => void;
   initialData?: Partial<Deck>;
   isEditing?: boolean;
