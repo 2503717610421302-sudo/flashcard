@@ -1,20 +1,35 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useEffect, useCallback } from 'react';
-import { FlashcardState, FlashcardAction, Deck, Flashcard } from '@/lib/types';
-import { sampleDecks, sampleCards } from '@/lib/sampleData';
+import React, {
+  createContext, useContext, useReducer,
+  useEffect, useCallback, useState,
+} from 'react';
+import { createClient } from '@/lib/supabase';
+import {
+  FlashcardState, FlashcardAction, Deck, Flashcard,
+} from '@/lib/types';
+import { fetchDecks, fetchAllCards } from '@/lib/supabase-helpers';
+import type { User } from '@supabase/supabase-js';
 
-const STORAGE_KEY = 'flashcard-study-data';
+// ─── Reducer ──────────────────────────────────────────────────────────────────
 
 const initialState: FlashcardState = {
   decks: [],
   cards: [],
+  loading: true,
+  error: null,
 };
 
 function reducer(state: FlashcardState, action: FlashcardAction): FlashcardState {
   switch (action.type) {
     case 'LOAD_DATA':
-      return action.payload;
+      return { ...action.payload, loading: false, error: null };
+
+    case 'SET_LOADING':
+      return { ...state, loading: action.payload };
+
+    case 'SET_ERROR':
+      return { ...state, error: action.payload, loading: false };
 
     case 'ADD_DECK':
       return { ...state, decks: [...state.decks, action.payload] };
@@ -51,7 +66,9 @@ function reducer(state: FlashcardState, action: FlashcardAction): FlashcardState
       return {
         ...state,
         cards: state.cards.map((c) =>
-          c.id === action.payload.cardId ? { ...c, mastered: !c.mastered, reviewCount: c.reviewCount + 1 } : c
+          c.id === action.payload.cardId
+            ? { ...c, mastered: !c.mastered, reviewCount: c.reviewCount + 1 }
+            : c
         ),
       };
 
@@ -68,42 +85,85 @@ function reducer(state: FlashcardState, action: FlashcardAction): FlashcardState
   }
 }
 
+// ─── Context ──────────────────────────────────────────────────────────────────
+
 interface FlashcardContextValue {
   state: FlashcardState;
   dispatch: React.Dispatch<FlashcardAction>;
+  user: User | null;
   getCardsByDeck: (deckId: string) => Flashcard[];
   getDeckById: (deckId: string) => Deck | undefined;
 }
 
 const FlashcardContext = createContext<FlashcardContextValue | null>(null);
 
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
 export function FlashcardProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [user, setUser] = useState<User | null>(null);
+  const supabase = createClient();
 
-  // Load from localStorage on mount
+  // 1. Resolve the current user, then load their data
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as FlashcardState;
-        if (parsed.decks && parsed.cards) {
-          dispatch({ type: 'LOAD_DATA', payload: parsed });
-          return;
+    let mounted = true;
+
+    async function init() {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      if (!mounted) return;
+
+      setUser(currentUser);
+
+      if (!currentUser) {
+        dispatch({ type: 'SET_LOADING', payload: false });
+        return;
+      }
+
+      try {
+        dispatch({ type: 'SET_LOADING', payload: true });
+        const [decks, cards] = await Promise.all([
+          fetchDecks(currentUser.id),
+          fetchAllCards(currentUser.id),
+        ]);
+        if (mounted) {
+          dispatch({ type: 'LOAD_DATA', payload: { decks, cards, loading: false, error: null } });
+        }
+      } catch (err) {
+        if (mounted) {
+          dispatch({ type: 'SET_ERROR', payload: (err as Error).message });
         }
       }
-      // First-time: seed with sample data
-      dispatch({ type: 'LOAD_DATA', payload: { decks: sampleDecks, cards: sampleCards } });
-    } catch {
-      dispatch({ type: 'LOAD_DATA', payload: { decks: sampleDecks, cards: sampleCards } });
     }
-  }, []);
 
-  // Persist to localStorage whenever state changes (after hydration)
-  useEffect(() => {
-    if (state.decks.length > 0 || state.cards.length > 0) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    }
-  }, [state]);
+    init();
+
+    // 2. Listen for auth changes (login / logout)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const newUser = session?.user ?? null;
+      setUser(newUser);
+
+      if (newUser) {
+        try {
+          dispatch({ type: 'SET_LOADING', payload: true });
+          const [decks, cards] = await Promise.all([
+            fetchDecks(newUser.id),
+            fetchAllCards(newUser.id),
+          ]);
+          dispatch({ type: 'LOAD_DATA', payload: { decks, cards, loading: false, error: null } });
+        } catch (err) {
+          dispatch({ type: 'SET_ERROR', payload: (err as Error).message });
+        }
+      } else {
+        // Logged out — clear state
+        dispatch({ type: 'LOAD_DATA', payload: { decks: [], cards: [], loading: false, error: null } });
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const getCardsByDeck = useCallback(
     (deckId: string) => state.cards.filter((c) => c.deckId === deckId),
@@ -116,11 +176,13 @@ export function FlashcardProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <FlashcardContext.Provider value={{ state, dispatch, getCardsByDeck, getDeckById }}>
+    <FlashcardContext.Provider value={{ state, dispatch, user, getCardsByDeck, getDeckById }}>
       {children}
     </FlashcardContext.Provider>
   );
 }
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useFlashcardContext() {
   const ctx = useContext(FlashcardContext);

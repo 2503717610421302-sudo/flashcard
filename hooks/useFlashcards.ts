@@ -2,43 +2,79 @@
 
 import { useFlashcardContext } from '@/context/FlashcardContext';
 import { Deck, Flashcard, DeckColor } from '@/lib/types';
-import { generateId, getMasteryPercent } from '@/lib/utils';
+import { getMasteryPercent } from '@/lib/utils';
+import {
+  insertDeck, updateDeck as dbUpdateDeck, deleteDeck as dbDeleteDeck,
+  insertCard, updateCard as dbUpdateCard, deleteCard as dbDeleteCard,
+  toggleCardMastered, updateDeckLastStudied,
+  insertStudySession,
+} from '@/lib/supabase-helpers';
+import type { StudySession } from '@/lib/types';
 
 export function useFlashcards() {
-  const { state, dispatch, getCardsByDeck, getDeckById } = useFlashcardContext();
+  const { state, dispatch, user, getCardsByDeck, getDeckById } = useFlashcardContext();
 
-  const addDeck = (data: Omit<Deck, 'id' | 'createdAt'>) => {
-    const deck: Deck = { ...data, id: generateId(), createdAt: new Date().toISOString() };
+  // ─── Decks ──────────────────────────────────────────────────────────────────
+
+  const addDeck = async (data: Omit<Deck, 'id' | 'createdAt' | 'userId'>) => {
+    if (!user) throw new Error('Not authenticated');
+    const deck = await insertDeck(user.id, data);
     dispatch({ type: 'ADD_DECK', payload: deck });
     return deck;
   };
 
-  const updateDeck = (deck: Deck) => dispatch({ type: 'UPDATE_DECK', payload: deck });
+  const updateDeck = async (deck: Deck) => {
+    const updated = await dbUpdateDeck(deck);
+    dispatch({ type: 'UPDATE_DECK', payload: updated });
+  };
 
-  const deleteDeck = (deckId: string) => dispatch({ type: 'DELETE_DECK', payload: deckId });
+  const deleteDeck = async (deckId: string) => {
+    if (!user) throw new Error('Not authenticated');
+    await dbDeleteDeck(deckId, user.id);
+    dispatch({ type: 'DELETE_DECK', payload: deckId });
+  };
 
-  const addCard = (data: Omit<Flashcard, 'id' | 'createdAt' | 'mastered' | 'reviewCount'>) => {
-    const card: Flashcard = {
-      ...data,
-      id: generateId(),
-      createdAt: new Date().toISOString(),
-      mastered: false,
-      reviewCount: 0,
-    };
+  // ─── Flashcards ─────────────────────────────────────────────────────────────
+
+  const addCard = async (data: { deckId: string; front: string; back: string }) => {
+    if (!user) throw new Error('Not authenticated');
+    const card = await insertCard(user.id, data);
     dispatch({ type: 'ADD_CARD', payload: card });
     return card;
   };
 
-  const updateCard = (card: Flashcard) => dispatch({ type: 'UPDATE_CARD', payload: card });
+  const updateCard = async (card: Flashcard) => {
+    const updated = await dbUpdateCard(card);
+    dispatch({ type: 'UPDATE_CARD', payload: updated });
+  };
 
-  const deleteCard = (cardId: string, deckId: string) =>
+  const deleteCard = async (cardId: string, deckId: string) => {
+    if (!user) throw new Error('Not authenticated');
+    await dbDeleteCard(cardId, user.id);
     dispatch({ type: 'DELETE_CARD', payload: { cardId, deckId } });
+  };
 
-  const toggleMastered = (cardId: string, deckId: string) =>
-    dispatch({ type: 'TOGGLE_MASTERED', payload: { cardId, deckId } });
+  const toggleMastered = async (cardId: string, deckId: string) => {
+    if (!user) throw new Error('Not authenticated');
+    const updated = await toggleCardMastered(cardId, user.id);
+    dispatch({ type: 'UPDATE_CARD', payload: updated });
+  };
 
-  const updateLastStudied = (deckId: string) =>
-    dispatch({ type: 'UPDATE_LAST_STUDIED', payload: { deckId, date: new Date().toISOString() } });
+  const updateLastStudied = async (deckId: string) => {
+    if (!user) throw new Error('Not authenticated');
+    await updateDeckLastStudied(deckId, user.id);
+    dispatch({
+      type: 'UPDATE_LAST_STUDIED',
+      payload: { deckId, date: new Date().toISOString() },
+    });
+  };
+
+  const saveStudySession = async (session: Omit<StudySession, 'id' | 'userId'>) => {
+    if (!user) throw new Error('Not authenticated');
+    return insertStudySession({ ...session, userId: user.id });
+  };
+
+  // ─── Stats ──────────────────────────────────────────────────────────────────
 
   const getDeckStats = (deckId: string) => {
     const cards = getCardsByDeck(deckId);
@@ -52,6 +88,9 @@ export function useFlashcards() {
   return {
     decks: state.decks,
     cards: state.cards,
+    loading: state.loading,
+    error: state.error,
+    user,
     getCardsByDeck,
     getDeckById,
     getDeckStats,
@@ -63,7 +102,9 @@ export function useFlashcards() {
     deleteCard,
     toggleMastered,
     updateLastStudied,
+    saveStudySession,
   };
 }
 
 export type { Deck, Flashcard, DeckColor };
+
