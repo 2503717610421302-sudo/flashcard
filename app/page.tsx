@@ -25,14 +25,14 @@ export default function DashboardPage() {
   const totalCards = cards.length;
   const masteredCards = cards.filter((c) => c.mastered).length;
 
-  const handleCreate = (data: Omit<Deck, 'id' | 'createdAt'>) => {
-    addDeck(data);
+  const handleCreate = async (data: Omit<Deck, 'id' | 'createdAt' | 'userId'>) => {
+    await addDeck(data);
     setCreateOpen(false);
   };
 
-  const handleUpdate = (data: Omit<Deck, 'id' | 'createdAt'>) => {
+  const handleUpdate = async (data: Omit<Deck, 'id' | 'createdAt' | 'userId'>) => {
     if (!editingDeck) return;
-    updateDeck({ ...editingDeck, ...data });
+    await updateDeck({ ...editingDeck, ...data });
     setEditingDeck(null);
   };
 
